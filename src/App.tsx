@@ -4,6 +4,10 @@ import { useState, useRef, useEffect } from 'react'
 import Hls from 'hls.js'
 import menu from "./assets/menu.svg"
 import close from "./assets/close.svg"
+import play from "./assets/play.svg"
+import pause from "./assets/pause.svg"
+import fullscreen_img from "./assets/fullscreen.svg"
+import exit_fullscreeen_img from "./assets/exit_fullscreen.svg"
 
 // 1. Namen groß schreiben!
 function MainPage() {
@@ -24,88 +28,265 @@ interface VideoPlayerProps {
 const VideoPlayer: React.FC<VideoPlayerProps> = ({ slug, videoPath, onNextEpisode }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // --- STATES ---
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+
+  const [showNextButton, setShowNextButton] = useState(false);
+  const [countdown, setCountdown] = useState(10);
+  const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   const storageKey = `progress_${slug}_${videoPath.replace(/\//g, "_")}`;
 
+  // --- AUTO-HIDE LOGIK ---
+  const handleUserActivity = () => {
+    setShowControls(true);
+    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    
+    // Verstecke die Leiste nach 3 Sek, wenn das Video läuft
+    controlsTimeoutRef.current = setTimeout(() => {
+      if (isPlaying) setShowControls(false);
+    }, 3000);
+  };
+
+  // --- FULLSCREEN LOGIK ---
+  const toggleFullscreen = () => {
+    if (!containerRef.current) return;
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen().catch((err) => console.error(err));
+    } else {
+      document.exitFullscreen();
+    }
+  };
+
+
+
+  useEffect(() => {
+    const handleFsChange = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
+
+  // --- PLAY/PAUSE & SEEK ---
+  const togglePlay = () => {
+    console.debug("play_pause")
+    if (!videoRef.current) return;
+    if (videoRef.current.paused) videoRef.current.play();
+    else videoRef.current.pause();
+    handleUserActivity();
+  };
+
+  const handleSeek = (time: number) => {
+    if (!videoRef.current) return;
+    videoRef.current.currentTime = time;
+  };
+
+  // --- KEYBOARD SHORTCUTS ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === 'f') toggleFullscreen();
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPlaying]); // Abhängigkeit für aktuellen State
+
+  // --- HAUPT LOGIK ---
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
+    setShowNextButton(false);
+    setCountdown(10);
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+
     const masterUrl = `http://localhost:5000/api/video/stream/master/${slug}/${videoPath}`;
     
-    // Cleanup alte Instanz
-    if (hlsRef.current) {
-      hlsRef.current.destroy();
-    }
-
     if (Hls.isSupported()) {
       const hls = new Hls();
       hls.loadSource(masterUrl);
       hls.attachMedia(video);
       hlsRef.current = hls;
-
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        // Fortschritt wiederherstellen
         const savedTime = localStorage.getItem(storageKey);
         if (savedTime) video.currentTime = parseFloat(savedTime);
-        
-        // Autoplay (stummgeschaltet startet zuverlässiger)
-        video.play().catch(() => console.log("User muss erst klicken"));
+        video.play().catch(() => {});
       });
-    } 
-    else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      // Safari Support
-      video.src = masterUrl;
     }
 
-    // Fortschritt speichern
-    const saveProgress = () => {
-      if (video.currentTime > 5) {
+    const handleTimeUpdate = () => {
+      setCurrentTime(video.currentTime);
+      setDuration(video.duration);
+      const timeLeft = video.duration - video.currentTime;
+      
+      if (video.currentTime > 60 && timeLeft > 120) {
         localStorage.setItem(storageKey, video.currentTime.toString());
+      } else if (timeLeft <= 120) {
+        localStorage.removeItem(storageKey);
+      }
+
+      if (timeLeft < 40 && timeLeft > 0 && !showNextButton) {
+        setShowNextButton(true);
+      }
+
+      if (timeLeft <= 10 && !countdownTimerRef.current && timeLeft > 0) {
+        startAutoNextTimer();
       }
     };
 
-    video.addEventListener('timeupdate', saveProgress);
+    const startAutoNextTimer = () => {
+      if (countdownTimerRef.current) return;
+      countdownTimerRef.current = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) {
+            if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+            onNextEpisode?.();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    };
+
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    
+    video.addEventListener('timeupdate', handleTimeUpdate);
+    video.addEventListener('play', onPlay);
+    video.addEventListener('pause', onPause);
     video.addEventListener('ended', () => onNextEpisode?.());
 
     return () => {
-      video.removeEventListener('timeupdate', saveProgress);
+      video.removeEventListener('timeupdate', handleTimeUpdate);
+      video.removeEventListener('play', onPlay);
+      video.removeEventListener('pause', onPause);
       if (hlsRef.current) hlsRef.current.destroy();
+      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
     };
-  }, [slug, videoPath]);
+  }, [slug, videoPath, onNextEpisode]);
 
+  const formatTime = (seconds: number) => {
+    if (isNaN(seconds)) return "00:00";
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (h > 0) return `${h}:${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+    return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+  };
+
+
+useEffect(() => {
+  const handleKeyDown = (e: KeyboardEvent) => {
+    // Falls der User gerade in einem Input tippt (z.B. Suche), keine Shortcuts triggern
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+    const video = videoRef.current;
+    if (!video) return;
+
+    // Tasten, die das Scrollen der Seite verhindern sollen
+    const preventKeys = [' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+    
+    if (preventKeys.includes(e.key)) {
+      e.preventDefault();
+      e.stopPropagation(); // Verhindert, dass andere Elemente das Event auch loggen
+    }
+
+    switch (e.key) {
+      case ' ': // Leertaste
+        // Wir nutzen direkt das video-Attribut statt des React-States
+        // Das ist 100% sicher gegen doppelte Logs
+        if (video.paused) {
+          video.play().catch(() => {});
+        } else {
+          video.pause();
+        }
+        handleUserActivity();
+        break;
+
+      case 'f':
+      case 'F':
+        toggleFullscreen();
+        break;
+
+      case 'ArrowRight':
+        video.currentTime = Math.min(video.duration, video.currentTime + 10);
+        handleUserActivity();
+        break;
+
+      case 'ArrowLeft':
+        video.currentTime = Math.max(0, video.currentTime - 10);
+        handleUserActivity();
+        break;
+
+      case 'ArrowUp':
+        video.volume = Math.min(1, video.volume + 0.1);
+        handleUserActivity();
+        break;
+
+      case 'ArrowDown':
+        video.volume = Math.max(0, video.volume - 0.1);
+        handleUserActivity();
+        break;
+    }
+  };
+
+  // 'true' aktiviert die Capture-Phase: Wir fangen den Key ab, 
+  // BEVOR er einen fokussierten Button triggern kann.
+  window.addEventListener('keydown', handleKeyDown, true);
+  
+  return () => {
+    window.removeEventListener('keydown', handleKeyDown, true);
+  };
+}, []); // Leeres Array! Der Listener wird nur einmal beim Start gebunden.
   return (
-    <div className="native-player-container" style={{ width: '100%', position: 'relative' }}>
-      <video
-        ref={videoRef}
-        controls
-        playsInline
-        style={{
-          width: '100%',
-          aspectRatio: '16 / 9',
-          backgroundColor: '#000',
-          borderRadius: '12px',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.5)'
-        }}
-      />
-      
-      {onNextEpisode && (
-        <button 
-          onClick={onNextEpisode}
-          style={{
-            position: 'absolute',
-            right: '20px',
-            bottom: '60px',
-            zIndex: 10,
-            padding: '10px 15px',
-            background: 'rgba(255,255,255,0.2)',
-            border: 'none',
-            color: 'white',
-            borderRadius: '50%',
-            cursor: 'pointer',
-            backdropFilter: 'blur(5px)'
-          }}
-        >
-          ➔
+    <div 
+      ref={containerRef} 
+      className={`EpisodeVideoPlayer-box ${fullscreen ? "fullscreen" : ""}`}
+      onMouseMove={handleUserActivity}
+      style={{ cursor: showControls ? 'default' : 'none' }}
+    >
+      <video ref={videoRef} playsInline className="player-card" onClick={togglePlay} />
+
+      <div className={`controlles ${showControls ? 'visible' : 'hidden'}`}>
+        <div className="playpauseimg" onClick={togglePlay}>
+          <img src={isPlaying ? pause : play} alt="Play/Pause" />
+        </div>
+
+        <input 
+          type="range" 
+          min={0} 
+          max={duration || 0} 
+          step={0.1}
+          value={currentTime} 
+          style={{ 
+            '--p': `${(currentTime / (duration || 1)) * 100}%`,
+            flex: 1 
+          } as React.CSSProperties}
+          onChange={(e) => handleSeek(parseFloat(e.target.value))}
+        />
+
+        <div className="video-time-display contrast-text">
+          {formatTime(currentTime)} / {formatTime(duration)}
+        </div>
+
+        <div className='fullscreenbtn' onClick={toggleFullscreen}>
+          <img src={fullscreen ? exit_fullscreeen_img : fullscreen_img} alt="Fullscreen" />
+        </div>
+      </div>
+
+      {showNextButton && (
+        <button className="plyr-next-button" onClick={() => onNextEpisode?.()}>
+          <span>Nächste Folge {countdown <= 10 && `in ${countdown}s`}</span>
+          <span className="icon">➔</span>
         </button>
       )}
     </div>
