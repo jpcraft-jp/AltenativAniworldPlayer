@@ -29,7 +29,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ slug, videoPath, onNextEpisod
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // --- STATES ---
   const [isPlaying, setIsPlaying] = useState(false);
@@ -40,7 +40,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ slug, videoPath, onNextEpisod
 
   const [showNextButton, setShowNextButton] = useState(false);
   const [countdown, setCountdown] = useState(10);
-  const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const storageKey = `progress_${slug}_${videoPath.replace(/\//g, "_")}`;
 
@@ -98,6 +98,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ slug, videoPath, onNextEpisod
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPlaying]); // Abhängigkeit für aktuellen State
 
   // --- HAUPT LOGIK ---
@@ -105,6 +106,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ slug, videoPath, onNextEpisod
     const video = videoRef.current;
     if (!video) return;
 
+     
     setShowNextButton(false);
     setCountdown(10);
     if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
@@ -172,6 +174,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ slug, videoPath, onNextEpisod
       if (hlsRef.current) hlsRef.current.destroy();
       if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug, videoPath, onNextEpisode]);
 
   const formatTime = (seconds: number) => {
@@ -246,6 +249,7 @@ useEffect(() => {
   return () => {
     window.removeEventListener('keydown', handleKeyDown, true);
   };
+// eslint-disable-next-line react-hooks/exhaustive-deps
 }, []); // Leeres Array! Der Listener wird nur einmal beim Start gebunden.
   return (
     <div 

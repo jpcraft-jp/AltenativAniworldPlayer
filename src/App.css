@@ -510,6 +510,7 @@ button, input {
 }
 input[type="range"] {
   -webkit-appearance: none; /* Deaktiviert Standard-Look */
+  appearance: none;
   width: 80%;
   height: 6px;
   background: rgba(255, 255, 255, 0.1);
